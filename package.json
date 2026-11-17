@@ -1,0 +1,5 @@
+{"name":"emotioncut-pc","version":"1.0.0","description":"EmotionCut Studio","author":"EmotionCut","main":"main.js",
+"scripts":{"start":"electron ."},
+"dependencies":{"ffmpeg-static":"^5.2.0"},
+"devDependencies":{"electron":"^31.0.0","electron-builder":"^24.13.3"},
+"build":{"appId":"com.emotioncut.pc","productName":"EmotionCut","asarUnpack":["node_modules/ffmpeg-static/**"],"win":{"target":"portable"}}}

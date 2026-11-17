@@ -1,0 +1,120 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>EmotionCut Studio</title><style>
+:root{--ac:#8b5cf6;--bg:#141418;--cd:#1e1e26;--bd:#33333f;--mu:#9a9ab0}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#ececf3;font:14px Segoe UI,sans-serif;display:flex;height:100vh}
+#L{width:360px;overflow:auto;padding:12px;border-right:1px solid var(--bd)}#R{flex:1;overflow:auto;padding:12px;display:flex;gap:14px}
+#C{flex:1;min-width:300px}#P{width:340px}h3{color:var(--ac);margin:14px 0 6px;font-size:14px}
+button,select,textarea,input{font:inherit;color:#ececf3;background:#2a2a35;border:1px solid var(--bd);border-radius:8px;padding:6px 10px}
+button{background:var(--ac);border:0;cursor:pointer;margin:2px}button.g{background:#2a2a35}button.on{outline:2px solid #fff}
+textarea{width:100%;height:90px}small,.m{color:var(--mu)}.row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid var(--bd)}
+.row.hl{background:#2a2540}input[type=range]{width:100%;padding:0}
+#stage{position:relative;height:540px;aspect-ratio:9/16;background:#000;border-radius:10px;overflow:hidden;margin:auto}
+#bv{width:100%;height:100%;object-fit:cover}#gi{position:absolute;display:none}
+#st{color:#a78bfa;margin:8px 0;min-height:20px}</style></head><body>
+<div id="L">
+<h2 style="margin:0">🎬 EmotionCut Studio</h2>
+<h3>Emotion folders (name = folder name)</h3>
+<button id="addF">+ Add folders (select many)</button><button id="addP">+ Add parent folder</button><div id="fl"></div>
+<h3>SFX folder</h3><button id="sfxB">Select SFX folder</button> <small id="sfxI"></small><br>
+<select id="sfxM"><option value="rand">Random SFX</option><option value="seq">SFX in order</option></select>
+<small>Put <b>+</b> after an emotion to add an SFX, e.g. shock+</small>
+<h3>B-roll (default for every video)</h3><button id="brB">Select B-roll</button> <small id="brI"></small>
+<h3>GIF settings (auto-saved)</h3><select id="pos"></select><div id="sl"></div>
+<h3>Output</h3><select id="res"><option value="1080">1080×1920</option><option value="720">720×1280</option></select>
+<button id="outB" class="g">Output folder</button> <small id="outI"></small></div>
+<div id="R"><div id="C">
+<h3>Videos</h3><button id="addV">+ Add videos (pick many voiceovers)</button><button id="bulkB" class="g">Bulk paste sequences</button>
+<div id="tabs"></div>
+<div id="bulk" style="display:none"><small>One block per video, in order. Separate blocks with a line containing ---</small><textarea id="bt" style="height:140px"></textarea><button id="bulkA">Apply & generate</button></div>
+<h3>Emotion sequence</h3><textarea id="tx" placeholder="sad+, happy:2, shocked+:0.75, curious"></textarea>
+<button id="gen">Generate this video</button><button id="genAll" class="g">Generate ALL</button>
+<div id="segs"></div>
+<h3>Export</h3><button id="ex">Export this video</button><button id="exAll">Export ALL videos</button><button id="cn" class="g">Cancel</button>
+<div id="st"></div><progress id="pg" value="0" max="100" style="width:100%"></progress></div>
+<div id="P"><h3>Preview</h3><div id="stage"><video id="bv" muted loop></video><img id="gi"></div><audio id="au"></audio>
+<div class="r"><button id="pl">▶ / ⏸</button> <span id="tm" class="m"></span></div><input type="range" id="seek" min="0" max="1" step="0.05" value="0">
+<small>Click a row's 🎲 to swap a GIF instantly, 📁 to choose one yourself, ▶ to jump there.</small></div></div>
+<script>
+const {ipcRenderer}=require('electron'),fs=require('fs'),path=require('path'),{spawn}=require('child_process');
+const ff=require('ffmpeg-static').replace('app.asar','app.asar.unpacked');
+const $=i=>document.getElementById(i),msg=t=>$('st').textContent=t;
+const D={pos:1,size:19,rect:80,maxh:44,sharp:40,sec:1,sfxVol:25,sfxMode:'rand',res:1080,folders:{},sfx:'',broll:'',out:''};
+const S=Object.assign(D,JSON.parse(localStorage.S||'{}')),save=()=>localStorage.S=JSON.stringify(S);
+const url=p=>'file:///'+encodeURI(p.replace(/\\/g,'/')).replace(/#/g,'%23');
+const open=o=>ipcRenderer.invoke('open',o);
+const gifsOf=d=>{try{return fs.readdirSync(d).filter(f=>/\.gif$/i.test(f)).map(f=>path.join(d,f))}catch(e){return[]}};
+const PRE=[['Top Center',.5,.12],['Upper Third',.5,.25],['Center Focus',.5,.5],['Lower Third',.5,.72],['Bottom Center',.5,.88],['Left Focus',.25,.5],['Right Focus',.75,.5]];
+function layout(nw,nh,W,H){const ar=nw/nh;const w=ar>1.25?Math.min(W*S.rect/100,H*S.maxh/100*ar):Math.min(Math.sqrt(S.size/100*W*H*ar),W*.9,H*S.maxh/100*ar);const h=w/ar,p=PRE[S.pos];
+ const ew=Math.round(w/2)*2,eh=Math.round(h/2)*2;return{w:ew,h:eh,x:Math.round(Math.min(Math.max(W*p[1]-ew/2,0),W-ew)),y:Math.round(Math.min(Math.max(H*p[2]-eh/2,0),H-eh))}}
+// ---- folders & settings UI ----
+function renderF(){const d=$('fl');d.innerHTML='';Object.keys(S.folders).sort().forEach(k=>{const r=document.createElement('div');r.className='row';r.innerHTML=`<span><b>${k}</b> <small>${gifsOf(S.folders[k]).length} GIFs</small></span>`;const b=document.createElement('button');b.textContent='✕';b.className='g';b.onclick=()=>{delete S.folders[k];save();renderF()};r.append(b);d.append(r)})}
+$('addF').onclick=async()=>{(await open({properties:['openDirectory','multiSelections']})).forEach(p=>S.folders[path.basename(p)]=p);save();renderF()};
+$('addP').onclick=async()=>{for(const p of await open({properties:['openDirectory']}))fs.readdirSync(p,{withFileTypes:true}).filter(e=>e.isDirectory()).forEach(e=>S.folders[e.name]=path.join(p,e.name));save();renderF()};
+const sfxList=()=>{try{return fs.readdirSync(S.sfx).filter(f=>/\.(mp3|wav|m4a|ogg|aac|flac)$/i.test(f)).map(f=>path.join(S.sfx,f))}catch(e){return[]}};
+let sq=0,sbag=[];const sfxPick=()=>{const l=sfxList();if(!l.length)return null;if(S.sfxMode==='seq')return l[sq++%l.length];if(!sbag.length)sbag=l.slice().sort(()=>Math.random()-.5);return sbag.pop()};
+const info=()=>{$('sfxI').textContent=S.sfx?path.basename(S.sfx)+' ('+sfxList().length+' files)':'';$('brI').textContent=S.broll?path.basename(S.broll):'none';$('outI').textContent=S.out||'(next to voiceover)'; $('bv').src=S.broll?url(S.broll):''};
+$('sfxB').onclick=async()=>{const p=(await open({properties:['openDirectory']}))[0];if(p){S.sfx=p;sq=0;sbag=[];save();info()}};
+$('brB').onclick=async()=>{const p=(await open({properties:['openFile'],filters:[{name:'Video',extensions:['mp4','mov','mkv','webm']}]}))[0];if(p){S.broll=p;save();info()}};
+$('outB').onclick=async()=>{const p=(await open({properties:['openDirectory']}))[0];if(p){S.out=p;save();info()}};
+$('sfxM').value=S.sfxMode;$('sfxM').onchange=e=>{S.sfxMode=e.target.value;save()};$('res').value=S.res;$('res').onchange=e=>{S.res=+e.target.value;save()};
+PRE.forEach((p,i)=>$('pos').add(new Option(p[0],i)));$('pos').value=S.pos;$('pos').onchange=e=>{S.pos=+e.target.value;save();place()};
+[['size','GIF size (same visual size every shape)',5,45,1],['rect','Rectangle (wide) GIF width',30,100,1],['maxh','Max height (tall GIFs)',20,70,1],['sharp','Sharpness',0,100,1],['sec','Default seconds per GIF',.25,10,.25],['sfxVol','SFX volume (voice stays 100%)',0,100,1]].forEach(([k,t,a,b,s])=>{
+ const d=document.createElement('div'),l=document.createElement('small'),i=document.createElement('input');i.type='range';i.min=a;i.max=b;i.step=s;i.value=S[k];
+ const u=()=>l.textContent=t+': '+S[k];i.oninput=()=>{S[k]=+i.value;u();save();place()};u();d.append(l,i);$('sl').append(d)});
+// ---- jobs ----
+let jobs=[],cur=0,shown=null;const bags={};
+const key=e=>Object.keys(S.folders).find(k=>k.toLowerCase()===e.toLowerCase());
+function pick(emo,avoid){let b=bags[emo];if(!b||!b.length){b=bags[emo]=gifsOf(S.folders[emo]).sort(()=>Math.random()-.5);if(b.length>1&&b[b.length-1]===avoid)b.unshift(b.pop())}return b.pop()}
+const durOf=p=>new Promise(r=>{const a=new Audio(url(p));a.onloadedmetadata=()=>r(a.duration);a.onerror=()=>r(0)});
+$('addV').onclick=async()=>{for(const p of await open({properties:['openFile','multiSelections'],filters:[{name:'Audio',extensions:['mp3','wav','m4a','aac','ogg','flac']}]}))jobs.push({name:path.parse(p).name,audio:p,dur:await durOf(p),text:'',segs:[]});cur=jobs.length-1;renderTabs();loadJob()};
+function renderTabs(){const t=$('tabs');t.innerHTML='';jobs.forEach((j,i)=>{const b=document.createElement('button');b.textContent=(i+1)+'. '+j.name+' ('+Math.round(j.dur)+'s)';b.className=i===cur?'':'g';b.onclick=()=>{cur=i;renderTabs();loadJob()};t.append(b)});
+ if(jobs.length){const x=document.createElement('button');x.textContent='✕ remove current';x.className='g';x.onclick=()=>{jobs.splice(cur,1);cur=Math.max(0,cur-1);renderTabs();loadJob()};t.append(x)}}
+function loadJob(){const j=jobs[cur];$('au').src=j?url(j.audio):'';$('tx').value=j?j.text:'';shown=null;renderSegs()}
+$('tx').oninput=e=>{if(jobs[cur])jobs[cur].text=e.target.value};
+$('au').onloadedmetadata=()=>$('seek').max=$('au').duration;
+function gen(j){if(!j.dur)return 'no audio length';if(!Object.keys(S.folders).length)return 'add emotion folders first';
+ const t=j.text.split(/[,\n]+/).map(x=>x.trim()).filter(Boolean).map(x=>{const m=x.match(/^([^+:]+?)\s*(\+)?\s*(?::\s*([\d.]+))?$/);return m?{emo:m[1].trim(),sfx:!!m[2],sec:+m[3]||S.sec}:null});
+ if(!t.length)return 'type emotions first';
+ for(const x of t){if(!x)return 'could not read the sequence';if(!key(x.emo))return 'no folder for "'+x.emo+'"'}
+ const out=[];let at=0,i=0,prev=null;while(at<j.dur-.01&&i<3000){const x=t[i%t.length],e=key(x.emo),g=pick(e,prev);if(!g)return 'folder "'+e+'" has no GIFs';
+  out.push({emo:e,gif:g,start:at,end:Math.min(at+x.sec,j.dur),sfx:x.sfx?sfxPick():null});prev=g;at+=x.sec;i++}
+ j.segs=out;return ''}
+$('gen').onclick=()=>{const j=jobs[cur];if(!j)return msg('Add a voiceover first');const e=gen(j);msg(e||'Generated '+j.segs.length+' clips');shown=null;renderSegs()};
+$('genAll').onclick=()=>{for(const j of jobs){const e=gen(j);if(e)return msg(j.name+': '+e)}msg('Generated all '+jobs.length+' videos');shown=null;renderSegs()};
+$('bulkB').onclick=()=>$('bulk').style.display=$('bulk').style.display==='none'?'block':'none';
+$('bulkA').onclick=()=>{const b=$('bt').value.split(/^\s*---\s*$/m).map(x=>x.trim()).filter(Boolean);b.forEach((x,i)=>{if(jobs[i])jobs[i].text=x});$('genAll').onclick();loadJob()};
+function renderSegs(){const j=jobs[cur],d=$('segs');d.innerHTML='';if(!j)return;j.segs.forEach((s,i)=>{const r=document.createElement('div');r.className='row';r.id='r'+i;
+ r.innerHTML=`<span>${i+1}. <b>${s.emo}</b> <small>${path.basename(s.gif)} · ${s.start.toFixed(2)}–${s.end.toFixed(2)}s${s.sfx?' · 🔊 '+path.basename(s.sfx):''}</small></span><span></span>`;
+ const b=(t,f)=>{const x=document.createElement('button');x.textContent=t;x.className='g';x.onclick=f;r.lastChild.append(x)};
+ b('🎲',()=>{s.gif=pick(s.emo,s.gif)||s.gif;shown=null;renderSegs()});
+ b('📁',async()=>{const p=(await open({properties:['openFile'],defaultPath:S.folders[s.emo],filters:[{name:'GIF',extensions:['gif']}]}))[0];if(p){s.gif=p;shown=null;renderSegs()}});
+ b('▶',()=>{$('au').currentTime=s.start;$('bv').currentTime=s.start%($('bv').duration||1)});d.append(r)})}
+// ---- preview ----
+const gi=$('gi'),au=$('au'),bv=$('bv');
+function place(){if(!gi.naturalWidth)return;const l=layout(gi.naturalWidth,gi.naturalHeight,1080,1920);Object.assign(gi.style,{width:l.w/10.8+'%',left:l.x/10.8+'%',top:l.y/19.2+'%'})}
+gi.onload=place;
+$('pl').onclick=()=>au.paused?(au.play(),bv.play()):(au.pause(),bv.pause());
+$('seek').oninput=e=>{au.currentTime=+e.target.value;bv.currentTime=au.currentTime%(bv.duration||1)};
+function tick(){const j=jobs[cur];if(j){const t=au.currentTime,s=j.segs.find(s=>t>=s.start&&t<s.end);
+ if(s!==shown){shown=s;if(s){gi.src=url(s.gif);gi.style.display='block';if(s.sfx&&!au.paused){const x=new Audio(url(s.sfx));x.volume=S.sfxVol/100;x.play()}}else gi.style.display='none';
+  document.querySelectorAll('.row.hl').forEach(e=>e.classList.remove('hl'));const i=j.segs.indexOf(s);if(i>=0)$('r'+i)?.classList.add('hl')}
+ $('seek').value=t;$('tm').textContent=t.toFixed(1)+' / '+j.dur.toFixed(1)+'s'}requestAnimationFrame(tick)}tick();
+// ---- export (real MP4 via bundled FFmpeg) ----
+let proc=null,canceled=false;
+const run=(args,dur,onp)=>new Promise((res,rej)=>{proc=spawn(ff,args);let err='';proc.stderr.on('data',d=>{const s=d.toString();err=(err+s).slice(-1200);const m=[...s.matchAll(/time=(\d+):(\d+):([\d.]+)/g)].pop();if(m)onp(Math.min(99,((+m[1]*3600+ +m[2]*60+ +m[3])/dur)*100))});
+ proc.on('close',c=>c===0?res():rej(canceled?'Cancelled':err));proc.on('error',e=>rej(e.message))});
+async function expJob(j,i,n){const W=S.res,H=Math.round(W*16/9);if(!j.segs.length)throw 'no sequence generated';if(!S.broll)throw 'select a B-roll first';
+ const dims=await Promise.all(j.segs.map(s=>new Promise(r=>{const m=new Image();m.onload=()=>r([m.naturalWidth,m.naturalHeight]);m.onerror=()=>r([300,300]);m.src=url(s.gif)})));
+ const a=['-y','-stream_loop','-1','-i',S.broll,'-i',j.audio];let f=`[0:v]fps=30,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1[bg];`,cat='';
+ const k=j.segs.length,A=(S.sharp/100*0.9).toFixed(2),sharp=S.sharp>0?`format=yuva444p,convolution=0m='0 -${A} 0 -${A} ${(1+4*A).toFixed(2)} -${A} 0 -${A} 0',`:'';
+ j.segs.forEach((s,q)=>{a.push('-stream_loop','-1','-i',s.gif);const l=layout(dims[q][0],dims[q][1],W,H);
+  f+=`[${q+2}:v]fps=30,trim=duration=${(s.end-s.start).toFixed(3)},setpts=PTS-STARTPTS,format=rgba,scale=${l.w}:${l.h}:flags=lanczos,${sharp}format=rgba,pad=${W}:${H}:${l.x}:${l.y}:color=black@0,setsar=1[g${q}];`;cat+=`[g${q}]`});
+ f+=`${cat}concat=n=${k}:v=1:a=0[ov];[bg][ov]overlay=0:0:format=auto,format=yuv420p[v];`;
+ const sx=j.segs.filter(s=>s.sfx);let mix='';sx.forEach((s,m)=>{a.push('-i',s.sfx);const ms=Math.round(s.start*1000);f+=`[${k+2+m}:a]volume=${S.sfxVol/100},adelay=${ms}|${ms}[x${m}];`;mix+=`[x${m}]`});
+ f+=sx.length?`[1:a]anull[v0];[v0]${mix}amix=inputs=${sx.length+1}:duration=first:normalize=0[aout]`:`[1:a]anull[aout]`;
+ const out=path.join(S.out||path.dirname(j.audio),j.name+'.mp4');
+ a.push('-filter_complex',f,'-map','[v]','-map','[aout]','-t',String(j.dur),'-r','30','-c:v','libx264','-preset','veryfast','-crf','18','-c:a','aac','-b:a','192k','-movflags','+faststart',out);
+ await run(a,j.dur,p=>{$('pg').value=p;msg(`Video ${i+1}/${n} · ${j.name} · ${p.toFixed(0)}%`)});$('pg').value=100;return out}
+async function expAll(list){canceled=false;for(let i=0;i<list.length;i++){try{await expJob(list[i],i,list.length)}catch(e){return msg('Failed: '+list[i].name+' — '+e)}}msg('Done ✓ saved '+list.length+' video(s)')}
+$('ex').onclick=()=>jobs[cur]&&expAll([jobs[cur]]);$('exAll').onclick=()=>expAll(jobs);$('cn').onclick=()=>{canceled=true;proc&&proc.kill()};
+renderF();info();msg('Ready');
+</script></body></html>
